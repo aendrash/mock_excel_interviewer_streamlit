@@ -1,16 +1,17 @@
-# frontend/app.py
+# app.py
 import streamlit as st
 from datetime import datetime
-import interview_logic as interview_logic  # Your logic file
+import interview_logic  # Hugging Face-powered logic
 import pathlib
 
-# Initialize session state
+# ----------------- Session Helpers -----------------
 if 'session' not in st.session_state:
     st.session_state.session = {}
 
 def clear_session_state():
     st.session_state.session = {}
 
+# ----------------- Core Functions -----------------
 def start_interview(name, email, domain):
     session_id = name + "_" + email + "_" + datetime.now().strftime("%Y%m%d%H%M%S")
     session = {
@@ -19,7 +20,7 @@ def start_interview(name, email, domain):
         "email": email,
         "domain": domain.lower(),
         "history": [],
-        "difficulty": 5,
+        "difficulty": 2,
         "num_asked": 0,
         "num_correct": 0,
         "num_wrong": 0,
@@ -27,15 +28,9 @@ def start_interview(name, email, domain):
         "transcript_path": None
     }
 
-    question, correct_answer = interview_logic.generate_question(
-        session["domain"],
-        session["difficulty"],
-        session["num_asked"],
-        session["num_correct"],
-        session["num_wrong"]
-    )
+    question = interview_logic.generate_question(session["domain"], session["difficulty"])
     session["current_question"] = question
-    session["correct_answer"] = correct_answer
+    session["correct_answer"] = "Expected Excel-related solution (approx)"  # placeholder
     session["num_asked"] = 1
 
     st.session_state.session = session
@@ -60,42 +55,24 @@ def submit_answer(user_answer):
         "explanation": explanation
     })
 
-    # Update counters and difficulty
     if float(score) > 0.7:
         session["num_correct"] += 1
-        session["difficulty"] = min(10, session["difficulty"] + 1)
+        session["difficulty"] = min(3, session["difficulty"] + 1)
     elif float(score) < 0.4:
         session["num_wrong"] += 1
-        session["difficulty"] = max(0, session["difficulty"] - 1)
+        session["difficulty"] = max(1, session["difficulty"] - 1)
 
-    # Finish interview after 10 questions
     if session["num_asked"] >= 10:
         session["finished"] = True
         finished_time = datetime.now()
-        filename = interview_logic.save_transcript(
-            session["name"],
-            session["email"],
-            session["history"],
-            session["domain"],
-            session["num_asked"],
-            session["num_correct"],
-            session["num_wrong"],
-            finished_time
-        )
+        filename = save_transcript(session, finished_time)
         session["transcript_path"] = filename
         return session
 
-    # Generate next question
     session["num_asked"] += 1
-    question, correct_answer = interview_logic.generate_question(
-        session["domain"],
-        session["difficulty"],
-        session["num_asked"],
-        session["num_correct"],
-        session["num_wrong"]
-    )
+    question = interview_logic.generate_question(session["domain"], session["difficulty"])
     session["current_question"] = question
-    session["correct_answer"] = correct_answer
+    session["correct_answer"] = "Expected Excel-related solution (approx)"  # placeholder
     return score, explanation, question, session["num_asked"]
 
 def skip_question():
@@ -105,18 +82,24 @@ def exit_interview():
     session = st.session_state.session
     session["finished"] = True
     finished_time = datetime.now()
-    filename = interview_logic.save_transcript(
-        session["name"],
-        session["email"],
-        session["history"],
-        session["domain"],
-        session["num_asked"],
-        session["num_correct"],
-        session["num_wrong"],
-        finished_time
-    )
+    filename = save_transcript(session, finished_time)
     session["transcript_path"] = filename
     return session
+
+def save_transcript(session, finished_time):
+    """Save transcript to text file."""
+    filename = f"transcript_{session['session_id']}.txt"
+    with open(filename, "w") as f:
+        f.write(f"Candidate: {session['name']} ({session['email']})\n")
+        f.write(f"Domain: {session['domain']}\n")
+        f.write(f"Finished: {finished_time}\n\n")
+        for i, entry in enumerate(session["history"], 1):
+            f.write(f"Q{i}: {entry['question']}\n")
+            f.write(f"Your Answer: {entry['user_answer']}\n")
+            f.write(f"Correct Answer: {entry['correct_answer']}\n")
+            f.write(f"Score: {entry['score']}\n")
+            f.write(f"Feedback: {entry['explanation']}\n\n")
+    return filename
 
 # ----------------- Streamlit UI -----------------
 st.set_page_config(page_title="Excel Mock Interviewer", layout="centered")
@@ -139,13 +122,13 @@ if not st.session_state.session:
 else:
     session = st.session_state.session
     if session.get("finished"):
-        st.success("Interview finished!")
+        st.success("Interview finished! ✅")
         st.markdown("### Final Results")
-        st.markdown(f"- Questions Asked: {session['num_asked'] - 1}")
+        st.markdown(f"- Questions Asked: {session['num_asked']}")
         st.markdown(f"- Correct Answers: {session['num_correct']}")
         st.markdown(f"- Wrong Answers: {session['num_wrong']}")
         final_score = (session['num_correct'] / session['num_asked']) * 100 if session['num_asked'] else 0
-        st.markdown(f"- Final Score: {round(final_score,2)}% ✅")
+        st.markdown(f"- Final Score: {round(final_score,2)}%")
 
         st.markdown("### Question-wise Performance")
         for i, entry in enumerate(session.get("history", []), 1):
@@ -156,7 +139,6 @@ else:
             st.markdown(f"- Feedback: {entry['explanation']}")
             st.markdown("---")
 
-        # Transcript download button
         transcript_path = session.get("transcript_path")
         if transcript_path and pathlib.Path(transcript_path).exists():
             with open(transcript_path, "rb") as f:
@@ -209,4 +191,3 @@ else:
         if st.session_state.get('score') is not None:
             st.markdown(f"### Last Answer Score: {st.session_state.score:.2f}")
             st.markdown(f"**Feedback:** {st.session_state.feedback}")
-
