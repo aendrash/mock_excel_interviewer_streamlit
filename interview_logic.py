@@ -1,67 +1,73 @@
 import os
-import requests
-from typing import Tuple
+import random
+from typing import Tuple, List, Dict
+from huggingface_hub import InferenceClient
 
-# --------------------------
-# Hugging Face Setup
-# --------------------------
+# Init Hugging Face client
+HF_API_KEY = os.getenv("HF_API_KEY")  # add this in Streamlit Cloud secrets
+MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.2"
+client = InferenceClient(model=MODEL_ID, token=HF_API_KEY)
 
-HF_API_KEY = os.getenv("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")  # set this in Streamlit Cloud secrets
-HF_MODEL = os.getenv("HF_MODEL", "mistralai/Mistral-7B-Instruct-v0.2")
+# ---------------- Question Bank ----------------
+QUESTION_BANK = [
+    ("How to find the average of column C in Excel?", "Use AVERAGE: =AVERAGE(C:C)"),
+    ("How to sum values in column B where column A equals 'X'?", "Use SUMIF: =SUMIF(A:A, \"X\", B:B)"),
+    ("How to count cells in column D greater than 100?", "Use COUNTIF: =COUNTIF(D:D, \">100\")"),
+    ("How to find duplicate values in column E?", "Use conditional formatting or =COUNTIF(E:E,E1)>1"),
+    ("How to combine first and last names in Excel?", "Use CONCATENATE: =A1 & \" \" & B1"),
+]
 
+def generate_question(domain: str, difficulty: int, num_asked: int, num_correct: int, num_wrong: int) -> Tuple[str, str]:
+    question, correct_answer = random.choice(QUESTION_BANK)
+    return question, correct_answer
 
-def request_huggingface(prompt: str, max_tokens: int = 256) -> str:
-    """Send a request to Hugging Face Inference API and return generated text."""
-    url = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
-    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
-    payload = {"inputs": prompt, "parameters": {"max_new_tokens": max_tokens}}
+# ---------------- Hugging Face LLM ----------------
+def request_llm(prompt: str, max_tokens: int = 256) -> str:
+    response = client.text_generation(prompt, max_new_tokens=max_tokens, do_sample=True)
+    return response
 
-    response = requests.post(url, headers=headers, json=payload, timeout=60)
-    response.raise_for_status()
-    result = response.json()
+def llm_score_answer(user_answer: str, correct_answer: str, question_text: str) -> Tuple[float, str]:
+    prompt = f"""
+You are an Excel interview evaluator.
+Question: {question_text}
+Correct Answer: {correct_answer}
+Candidate Answer: {user_answer}
 
-    # HF returns list of dicts with 'generated_text'
-    if isinstance(result, list) and "generated_text" in result[0]:
-        return result[0]["generated_text"]
-    return str(result)
+Evaluate the candidate’s answer.
+1. Give a score between 0.0 and 1.0 (float).
+2. Explain why the score was given.
+Format your reply as:
+Score: <score>
+Explanation: <explanation>
+"""
+    response_text = request_llm(prompt)
 
-
-# --------------------------
-# Core Interview Logic
-# --------------------------
-
-def generate_question(domain: str, difficulty: int) -> str:
-    """Generate a new Excel interview question based on domain and difficulty."""
-    prompt = (
-        f"Generate one interview-style Excel question for the {domain} domain.\n"
-        f"Difficulty level: {difficulty} (1=easy, 3=hard).\n"
-        "Return only the question, without explanations or answers."
-    )
-    return request_huggingface(prompt, max_tokens=128)
-
+    # Parse
+    score, explanation = 0.0, "Could not parse model response."
+    for line in response_text.splitlines():
+        if line.strip().lower().startswith("score:"):
+            try:
+                score = float(line.split(":", 1)[1].strip())
+            except:
+                score = 0.0
+        if line.strip().lower().startswith("explanation:"):
+            explanation = line.split(":", 1)[1].strip()
+    return score, explanation
 
 def evaluate_answer(user_answer: str, correct_answer: str, question_text: str) -> Tuple[float, str]:
-    """Evaluate user answer using Hugging Face model and return (score, feedback)."""
-    prompt = f"""
-    Question: {question_text}
-    Correct Answer: {correct_answer}
-    User Answer: {user_answer}
+    return llm_score_answer(user_answer, correct_answer, question_text)
 
-    Compare the user answer with the correct answer.
-    - Give a score between 0 and 1 (0 = wrong, 1 = correct, 0.5 = partially correct).
-    - Provide short, clear feedback explaining why.
-    """
-
-    response_text = request_huggingface(prompt, max_tokens=256)
-
-    # crude score extraction
-    score = 0.0
-    text_lower = response_text.lower()
-    if "1" in text_lower:
-        score = 1.0
-    elif "0.5" in text_lower:
-        score = 0.5
-    elif "0" in text_lower:
-        score = 0.0
-
-    return score, response_text.strip()
+def save_transcript(name: str, email: str, history: List[Dict], domain: str, num_asked: int, num_correct: int, num_wrong: int, finished_time) -> str:
+    filename = f"{name}_{email}_{finished_time.strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(filename, "w") as f:
+        f.write(f"Candidate: {name} ({email})\n")
+        f.write(f"Domain: {domain}\n")
+        f.write(f"Finished: {finished_time}\n")
+        f.write(f"Total Questions: {num_asked}, Correct: {num_correct}, Wrong: {num_wrong}\n\n")
+        for i, entry in enumerate(history, 1):
+            f.write(f"Q{i}: {entry['question']}\n")
+            f.write(f"Answer: {entry['user_answer']}\n")
+            f.write(f"Correct Answer: {entry['correct_answer']}\n")
+            f.write(f"Score: {entry['score']:.2f}\n")
+            f.write(f"Feedback: {entry['explanation']}\n\n")
+    return filename
