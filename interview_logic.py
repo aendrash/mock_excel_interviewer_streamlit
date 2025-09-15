@@ -1,5 +1,6 @@
 import os
-import random
+from datetime import datetime
+from time import sleep
 from typing import Tuple, List, Dict
 from huggingface_hub import InferenceClient
 
@@ -7,67 +8,131 @@ from huggingface_hub import InferenceClient
 HF_API_KEY = os.getenv("HF_API_KEY")  # add this in Streamlit Cloud secrets
 MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.2"
 client = InferenceClient(model=MODEL_ID, token=HF_API_KEY)
+MAX_LLM_RETRIES = 2
 
-# ---------------- Question Bank ----------------
-QUESTION_BANK = [
-    ("How to find the average of column C in Excel?", "Use AVERAGE: =AVERAGE(C:C)"),
-    ("How to sum values in column B where column A equals 'X'?", "Use SUMIF: =SUMIF(A:A, \"X\", B:B)"),
-    ("How to count cells in column D greater than 100?", "Use COUNTIF: =COUNTIF(D:D, \">100\")"),
-    ("How to find duplicate values in column E?", "Use conditional formatting or =COUNTIF(E:E,E1)>1"),
-    ("How to combine first and last names in Excel?", "Use CONCATENATE: =A1 & \" \" & B1"),
-]
+# ---------------- LLM Prompts ----------------
+def create_llm_question_prompt(domain: str, difficulty: int, num_asked: int, num_correct: int, num_wrong: int) -> str:
+    return (
+        f"You are a knowledgeable Excel interviewer specialized in {domain} domain.\n"
+        f"The candidate has answered {num_asked} interview questions with {num_correct} correct and {num_wrong} wrong answers so far.\n"
+        f"Ask the next question at difficulty level {difficulty} (0=easy, 10=hard).\n"
+        "Provide a clear, practical Excel interview question for this domain and difficulty level, and also supply an ideal correct answer as reference.\n"
+        "Format your response as:\n"
+        "Question: <your question text>\n"
+        "Answer: <the correct answer as concise formula/text>\n"
+        "Do not include anything else or explanation."
+    )
+
+def create_llm_scoring_prompt(user_answer: str, correct_answer: str, question_text: str) -> str:
+    return (
+        "You are an expert Excel interviewer evaluator.\n"
+        "Given the interview question:\n"
+        f"\"{question_text}\"\n\n"
+        "Correct answer:\n"
+        f"{correct_answer}\n\n"
+        "Candidate answer:\n"
+        f"{user_answer}\n\n"
+        "Evaluate the candidate's answer considering the following:\n"
+        "- Accept formula answers even if rows/columns differ by one or minor variations in syntax, as long as logic is correct.\n"
+        "- For questions about PivotTables or UI operations, award full credit if candidate describes correct creation steps or approach.\n"
+        "- For multi-sheet summaries, accept Power Query, formulas, Consolidate tool, or VBA-based solutions.\n"
+        "- For conceptual or complex problem questions, accept partial credit for reasonable approaches or stating the need for Solver/macros.\n"
+        "- Award partial credit when the answer is mostly correct but misses some edge cases or details.\n"
+        "- Do not penalize minor formatting or phrasing differences.\n"
+        "Provide a clear numeric score between 0 (completely incorrect) and 1 (perfectly correct) on the first line.\n"
+        "On the second line, provide a concise explanation summarizing the evaluation.\n"
+        "Format strictly as:\n"
+        "Score: <decimal number between 0 and 1>\n"
+        "Explanation: <brief reasoning>"
+    )
+
+# ---------------- LLM Requests ----------------
+def request_llm(prompt: str, max_tokens: int = 400) -> str:
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": max_tokens,
+            "do_sample": True,
+            "temperature": 0.7
+        }
+    }
+    attempt = 0
+    while attempt <= MAX_LLM_RETRIES:
+        try:
+            response = client.text_generation(prompt, max_new_tokens=max_tokens, do_sample=True)
+            return response
+        except Exception as e:
+            attempt += 1
+            if attempt > MAX_LLM_RETRIES:
+                raise e
+            sleep(1)
+
+# ---------------- Generate Question ----------------
+def parse_question_answer(text: str) -> Tuple[str, str]:
+    lines = text.split("\n")
+    question = ""
+    answer = ""
+    for line in lines:
+        if line.lower().startswith("question:"):
+            question = line.split(":", 1)[1].strip()
+        elif line.lower().startswith("answer:"):
+            answer = line.split(":", 1)[1].strip()
+    return question, answer
 
 def generate_question(domain: str, difficulty: int, num_asked: int, num_correct: int, num_wrong: int) -> Tuple[str, str]:
-    question, correct_answer = random.choice(QUESTION_BANK)
-    return question, correct_answer
+    prompt = create_llm_question_prompt(domain, difficulty, num_asked, num_correct, num_wrong)
+    for attempt in range(MAX_LLM_RETRIES + 1):
+        try:
+            response_text = request_llm(prompt)
+            question, correct_answer = parse_question_answer(response_text)
+            if question and correct_answer:
+                return question, correct_answer
+        except Exception:
+            sleep(1)
+    # fallback
+    fallback_q = "Create a sample Excel question: How to sum values in column B where column A equals 'X'?"
+    fallback_a = "Use SUMIF: =SUMIF(A:A, \"X\", B:B)"
+    return fallback_q, fallback_a
 
-# ---------------- Hugging Face LLM ----------------
-def request_llm(prompt: str, max_tokens: int = 256) -> str:
-    response = client.text_generation(prompt, max_new_tokens=max_tokens, do_sample=True)
-    return response
-
-def llm_score_answer(user_answer: str, correct_answer: str, question_text: str) -> Tuple[float, str]:
-    prompt = f"""
-You are an Excel interview evaluator.
-Question: {question_text}
-Correct Answer: {correct_answer}
-Candidate Answer: {user_answer}
-
-Evaluate the candidate’s answer.
-1. Give a score between 0.0 and 1.0 (float).
-2. Explain why the score was given.
-Format your reply as:
-Score: <score>
-Explanation: <explanation>
-"""
-    response_text = request_llm(prompt)
-
-    # Parse
-    score, explanation = 0.0, "Could not parse model response."
+# ---------------- Evaluate Answer ----------------
+def evaluate_answer(user_answer: str, correct_answer: str, question_text: str) -> Tuple[float, str]:
+    if user_answer.strip().lower() == "skip":
+        return 0.0, "Question skipped by user."
+    prompt = create_llm_scoring_prompt(user_answer, correct_answer, question_text)
+    response_text = request_llm(prompt, max_tokens=256)
+    score = 0.0
+    explanation = "Could not parse response."
     for line in response_text.splitlines():
-        if line.strip().lower().startswith("score:"):
+        if line.lower().startswith("score:"):
             try:
                 score = float(line.split(":", 1)[1].strip())
+                score = max(0.0, min(1.0, score))
             except:
                 score = 0.0
-        if line.strip().lower().startswith("explanation:"):
+        if line.lower().startswith("explanation:"):
             explanation = line.split(":", 1)[1].strip()
     return score, explanation
 
-def evaluate_answer(user_answer: str, correct_answer: str, question_text: str) -> Tuple[float, str]:
-    return llm_score_answer(user_answer, correct_answer, question_text)
-
+# ---------------- Save Transcript ----------------
 def save_transcript(name: str, email: str, history: List[Dict], domain: str, num_asked: int, num_correct: int, num_wrong: int, finished_time) -> str:
-    filename = f"{name}_{email}_{finished_time.strftime('%Y%m%d_%H%M%S')}.txt"
-    with open(filename, "w") as f:
-        f.write(f"Candidate: {name} ({email})\n")
-        f.write(f"Domain: {domain}\n")
-        f.write(f"Finished: {finished_time}\n")
-        f.write(f"Total Questions: {num_asked}, Correct: {num_correct}, Wrong: {num_wrong}\n\n")
+    safe_name = name.replace(" ", "_")
+    safe_email = email.replace("@", "_at_").replace(".", "_")
+    timestr = finished_time.strftime('%Y%m%d_%H%M%S')
+    filename = f"{safe_name}_{safe_email}_{timestr}.txt"
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(f"Excel Mock Interview Report\n")
+        f.write(f"Name    : {name}\n")
+        f.write(f"Email   : {email}\n")
+        f.write(f"Domain  : {domain}\n")
+        f.write(f"Date    : {finished_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total Questions: {num_asked}\n")
+        f.write(f"Correct Answers: {num_correct}\n")
+        f.write(f"Wrong Answers  : {num_wrong}\n\n")
         for i, entry in enumerate(history, 1):
-            f.write(f"Q{i}: {entry['question']}\n")
-            f.write(f"Answer: {entry['user_answer']}\n")
-            f.write(f"Correct Answer: {entry['correct_answer']}\n")
-            f.write(f"Score: {entry['score']:.2f}\n")
-            f.write(f"Feedback: {entry['explanation']}\n\n")
+            f.write(f"--- Q{i} ---\n")
+            f.write(f"Question:\n{entry.get('question')}\n")
+            f.write(f"Your answer:\n{entry.get('user_answer')}\n")
+            f.write(f"Correct answer:\n{entry.get('correct_answer')}\n")
+            f.write(f"Score: {entry.get('score', 0.0):.2f}\n")
+            f.write(f"Explanation:\n{entry.get('explanation')}\n\n")
     return filename
