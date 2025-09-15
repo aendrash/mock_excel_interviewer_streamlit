@@ -48,24 +48,30 @@ def create_llm_scoring_prompt(user_answer: str, correct_answer: str, question_te
 
 # ---------------- LLM Requests ----------------
 def request_llm(prompt: str, max_tokens: int = 400) -> str:
-    payload = {
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": max_tokens,
-            "do_sample": True,
-            "temperature": 0.7
-        }
-    }
     attempt = 0
     while attempt <= MAX_LLM_RETRIES:
         try:
-            response = client.text_generation(prompt, max_new_tokens=max_tokens, do_sample=True)
-            return response
+            response = client.text_generation(
+                inputs=prompt,   # <-- FIXED
+                max_new_tokens=max_tokens,
+                do_sample=True,
+                temperature=0.7
+            )
+            # Some models return dict/list instead of raw string
+            if isinstance(response, str):
+                return response
+            elif isinstance(response, list) and "generated_text" in response[0]:
+                return response[0]["generated_text"]
+            elif isinstance(response, dict) and "generated_text" in response:
+                return response["generated_text"]
+            else:
+                return str(response)
         except Exception as e:
             attempt += 1
             if attempt > MAX_LLM_RETRIES:
                 raise e
             sleep(1)
+
 
 # ---------------- Generate Question ----------------
 def parse_question_answer(text: str) -> Tuple[str, str]:
@@ -136,3 +142,4 @@ def save_transcript(name: str, email: str, history: List[Dict], domain: str, num
             f.write(f"Score: {entry.get('score', 0.0):.2f}\n")
             f.write(f"Explanation:\n{entry.get('explanation')}\n\n")
     return filename
+
