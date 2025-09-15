@@ -1,17 +1,22 @@
-# app.py
+# frontend/app.py
 import streamlit as st
 from datetime import datetime
-import interview_logic  # Hugging Face-powered logic
+import interview_logic as interview_logic  # Your logic file
 import pathlib
+import os  # 🔑 To check if HF_API_KEY exists
 
-# ----------------- Session Helpers -----------------
+# ----------------- Check Hugging Face API Key -----------------
+if not os.getenv("HF_API_KEY"):
+    st.error("🚨 Missing Hugging Face API Key! \n\nPlease add your `HF_API_KEY` in Streamlit Cloud → Settings → Secrets.")
+    st.stop()
+
+# ----------------- Session State -----------------
 if 'session' not in st.session_state:
     st.session_state.session = {}
 
 def clear_session_state():
     st.session_state.session = {}
 
-# ----------------- Core Functions -----------------
 def start_interview(name, email, domain):
     session_id = name + "_" + email + "_" + datetime.now().strftime("%Y%m%d%H%M%S")
     session = {
@@ -20,7 +25,7 @@ def start_interview(name, email, domain):
         "email": email,
         "domain": domain.lower(),
         "history": [],
-        "difficulty": 2,
+        "difficulty": 5,
         "num_asked": 0,
         "num_correct": 0,
         "num_wrong": 0,
@@ -28,9 +33,15 @@ def start_interview(name, email, domain):
         "transcript_path": None
     }
 
-    question = interview_logic.generate_question(session["domain"], session["difficulty"])
+    question, correct_answer = interview_logic.generate_question(
+        session["domain"],
+        session["difficulty"],
+        session["num_asked"],
+        session["num_correct"],
+        session["num_wrong"]
+    )
     session["current_question"] = question
-    session["correct_answer"] = "Expected Excel-related solution (approx)"  # placeholder
+    session["correct_answer"] = correct_answer
     session["num_asked"] = 1
 
     st.session_state.session = session
@@ -41,11 +52,15 @@ def submit_answer(user_answer):
     if session.get("finished"):
         return
 
-    score, explanation = interview_logic.evaluate_answer(
-        user_answer,
-        session["correct_answer"],
-        session["current_question"]
-    )
+    try:  # 🔑 Graceful handling of API issues
+        score, explanation = interview_logic.evaluate_answer(
+            user_answer,
+            session["correct_answer"],
+            session["current_question"]
+        )
+    except Exception as e:
+        st.error(f"⚠️ Hugging Face API error: {e}")
+        return None, None, None, None
 
     session["history"].append({
         "question": session["current_question"],
@@ -55,24 +70,42 @@ def submit_answer(user_answer):
         "explanation": explanation
     })
 
+    # Update counters and difficulty
     if float(score) > 0.7:
         session["num_correct"] += 1
-        session["difficulty"] = min(3, session["difficulty"] + 1)
+        session["difficulty"] = min(10, session["difficulty"] + 1)
     elif float(score) < 0.4:
         session["num_wrong"] += 1
-        session["difficulty"] = max(1, session["difficulty"] - 1)
+        session["difficulty"] = max(0, session["difficulty"] - 1)
 
+    # Finish interview after 10 questions
     if session["num_asked"] >= 10:
         session["finished"] = True
         finished_time = datetime.now()
-        filename = save_transcript(session, finished_time)
+        filename = interview_logic.save_transcript(
+            session["name"],
+            session["email"],
+            session["history"],
+            session["domain"],
+            session["num_asked"],
+            session["num_correct"],
+            session["num_wrong"],
+            finished_time
+        )
         session["transcript_path"] = filename
         return session
 
+    # Generate next question
     session["num_asked"] += 1
-    question = interview_logic.generate_question(session["domain"], session["difficulty"])
+    question, correct_answer = interview_logic.generate_question(
+        session["domain"],
+        session["difficulty"],
+        session["num_asked"],
+        session["num_correct"],
+        session["num_wrong"]
+    )
     session["current_question"] = question
-    session["correct_answer"] = "Expected Excel-related solution (approx)"  # placeholder
+    session["correct_answer"] = correct_answer
     return score, explanation, question, session["num_asked"]
 
 def skip_question():
@@ -82,24 +115,18 @@ def exit_interview():
     session = st.session_state.session
     session["finished"] = True
     finished_time = datetime.now()
-    filename = save_transcript(session, finished_time)
+    filename = interview_logic.save_transcript(
+        session["name"],
+        session["email"],
+        session["history"],
+        session["domain"],
+        session["num_asked"],
+        session["num_correct"],
+        session["num_wrong"],
+        finished_time
+    )
     session["transcript_path"] = filename
     return session
-
-def save_transcript(session, finished_time):
-    """Save transcript to text file."""
-    filename = f"transcript_{session['session_id']}.txt"
-    with open(filename, "w") as f:
-        f.write(f"Candidate: {session['name']} ({session['email']})\n")
-        f.write(f"Domain: {session['domain']}\n")
-        f.write(f"Finished: {finished_time}\n\n")
-        for i, entry in enumerate(session["history"], 1):
-            f.write(f"Q{i}: {entry['question']}\n")
-            f.write(f"Your Answer: {entry['user_answer']}\n")
-            f.write(f"Correct Answer: {entry['correct_answer']}\n")
-            f.write(f"Score: {entry['score']}\n")
-            f.write(f"Feedback: {entry['explanation']}\n\n")
-    return filename
 
 # ----------------- Streamlit UI -----------------
 st.set_page_config(page_title="Excel Mock Interviewer", layout="centered")
@@ -124,7 +151,7 @@ else:
     if session.get("finished"):
         st.success("Interview finished! ✅")
         st.markdown("### Final Results")
-        st.markdown(f"- Questions Asked: {session['num_asked']}")
+        st.markdown(f"- Questions Asked: {session['num_asked'] - 1}")
         st.markdown(f"- Correct Answers: {session['num_correct']}")
         st.markdown(f"- Wrong Answers: {session['num_wrong']}")
         final_score = (session['num_correct'] / session['num_asked']) * 100 if session['num_asked'] else 0
@@ -139,6 +166,7 @@ else:
             st.markdown(f"- Feedback: {entry['explanation']}")
             st.markdown("---")
 
+        # Transcript download button
         transcript_path = session.get("transcript_path")
         if transcript_path and pathlib.Path(transcript_path).exists():
             with open(transcript_path, "rb") as f:
@@ -169,20 +197,24 @@ else:
                 exit_ = st.form_submit_button("Exit Interview")
 
         if submit and answer.strip():
-            score, explanation, next_q, q_num = submit_answer(answer.strip())
-            st.session_state.answer_input_key = key_value + 1
-            st.session_state.score = score
-            st.session_state.feedback = explanation
-            st.session_state.session["current_question"] = next_q
-            st.session_state.session["num_asked"] = q_num
-            st.rerun()
+            result = submit_answer(answer.strip())
+            if result and len(result) == 4:
+                score, explanation, next_q, q_num = result
+                st.session_state.answer_input_key = key_value + 1
+                st.session_state.score = score
+                st.session_state.feedback = explanation
+                st.session_state.session["current_question"] = next_q
+                st.session_state.session["num_asked"] = q_num
+                st.rerun()
 
         if skip:
-            score, explanation, next_q, q_num = skip_question()
-            st.session_state.answer_input_key = key_value + 1
-            st.session_state.session["current_question"] = next_q
-            st.session_state.session["num_asked"] = q_num
-            st.rerun()
+            result = skip_question()
+            if result and len(result) == 4:
+                score, explanation, next_q, q_num = result
+                st.session_state.answer_input_key = key_value + 1
+                st.session_state.session["current_question"] = next_q
+                st.session_state.session["num_asked"] = q_num
+                st.rerun()
 
         if exit_:
             exit_interview()
