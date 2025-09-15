@@ -13,15 +13,14 @@ MAX_LLM_RETRIES = 2
 # ---------------- LLM Prompts ----------------
 def create_llm_question_prompt(domain: str, difficulty: int, num_asked: int, num_correct: int, num_wrong: int) -> str:
     return (
-        f"You are a knowledgeable Excel interviewer specialized in {domain} domain.\n"
-        f"The candidate has answered {num_asked} interview questions with {num_correct} correct and {num_wrong} wrong answers so far.\n"
-        f"Ask the next question at difficulty level {difficulty} (0=easy, 10=hard).\n"
-        "Provide a clear, practical Excel interview question for this domain and difficulty level, and also supply an ideal correct answer as reference.\n"
-        "Format your response as:\n"
-        "Question: <your question text>\n"
-        "Answer: <the correct answer as concise formula/text>\n"
-        "Do not include anything else or explanation."
+        f"You are an Excel interviewer specialized in {domain}.\n"
+        f"Candidate so far: {num_asked} questions, {num_correct} correct, {num_wrong} wrong.\n"
+        f"Next question difficulty: {difficulty} (0=easy, 10=hard).\n\n"
+        "⚠️ IMPORTANT: Output ONLY in this exact format (no extra words):\n"
+        "Question: <your question>\n"
+        "Answer: <the correct Excel answer>\n"
     )
+
 
 def create_llm_scoring_prompt(user_answer: str, correct_answer: str, question_text: str) -> str:
     return (
@@ -75,15 +74,15 @@ def request_llm(prompt: str, max_tokens: int = 400) -> str:
 
 # ---------------- Generate Question ----------------
 def parse_question_answer(text: str) -> Tuple[str, str]:
-    lines = text.split("\n")
-    question = ""
-    answer = ""
-    for line in lines:
-        if line.lower().startswith("question:"):
-            question = line.split(":", 1)[1].strip()
-        elif line.lower().startswith("answer:"):
-            answer = line.split(":", 1)[1].strip()
+    question, answer = "", ""
+    for line in text.split("\n"):
+        clean = line.strip().lower()
+        if clean.startswith("question"):
+            question = line.split(":", 1)[1].strip() if ":" in line else line.split("-", 1)[1].strip()
+        elif clean.startswith("answer"):
+            answer = line.split(":", 1)[1].strip() if ":" in line else line.split("-", 1)[1].strip()
     return question, answer
+
 
 def generate_question(domain: str, difficulty: int, num_asked: int, num_correct: int, num_wrong: int) -> Tuple[str, str]:
     prompt = create_llm_question_prompt(domain, difficulty, num_asked, num_correct, num_wrong)
@@ -91,6 +90,8 @@ def generate_question(domain: str, difficulty: int, num_asked: int, num_correct:
         try:
             response_text = request_llm(prompt)
             question, correct_answer = parse_question_answer(response_text)
+            print("LLM raw output:", response_text)
+
             if question and correct_answer:
                 return question, correct_answer
         except Exception:
@@ -142,4 +143,5 @@ def save_transcript(name: str, email: str, history: List[Dict], domain: str, num
             f.write(f"Score: {entry.get('score', 0.0):.2f}\n")
             f.write(f"Explanation:\n{entry.get('explanation')}\n\n")
     return filename
+
 
