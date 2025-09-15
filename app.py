@@ -1,7 +1,7 @@
 # frontend/app.py
 import streamlit as st
 from datetime import datetime
-import backend.interview_logic as interview_logic  # Your logic file
+import interview_logic as interview_logic  # Your logic file
 import pathlib
 
 # Initialize session state
@@ -209,3 +209,4 @@ else:
         if st.session_state.get('score') is not None:
             st.markdown(f"### Last Answer Score: {st.session_state.score:.2f}")
             st.markdown(f"**Feedback:** {st.session_state.feedback}")
+
