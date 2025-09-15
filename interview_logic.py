@@ -90,8 +90,6 @@ def generate_question(domain: str, difficulty: int, num_asked: int, num_correct:
         try:
             response_text = request_llm(prompt)
             question, correct_answer = parse_question_answer(response_text)
-            print("LLM raw output:", response_text)
-
             if question and correct_answer:
                 return question, correct_answer
         except Exception:
@@ -143,5 +141,6 @@ def save_transcript(name: str, email: str, history: List[Dict], domain: str, num
             f.write(f"Score: {entry.get('score', 0.0):.2f}\n")
             f.write(f"Explanation:\n{entry.get('explanation')}\n\n")
     return filename
+
 
 
