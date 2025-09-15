@@ -1,5 +1,4 @@
-fastapi
-uvicorn
-pydantic
-requests
 streamlit
+huggingface-hub
+requests
+pandas
