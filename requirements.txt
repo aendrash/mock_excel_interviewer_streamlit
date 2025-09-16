@@ -3,4 +3,3 @@ huggingface-hub
 requests
 pandas
 fpdf
-io
