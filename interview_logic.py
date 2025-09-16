@@ -61,6 +61,10 @@ def request_llm(prompt: str, max_tokens: int = 400) -> str:
                 temperature=0.7,
             )
             # Extract text safely (works both locally & Streamlit Cloud)
+            try:
+                print(completion.choices[0].message)
+            except:
+                pass
             return getattr(completion.choices[0].message, "content", None) or completion.choices[0].message.get("content", "")
         except Exception as e:
             attempt += 1
@@ -100,9 +104,11 @@ def generate_question(domain: str, difficulty: int, num_asked: int, num_correct:
         try:
             response_text = request_llm(prompt)
             question, correct_answer = parse_question_answer(response_text)
+            print(" question " , question , " answer " ,answer)
             if question and correct_answer:
                 return question, correct_answer
         except Exception:
+            print(Exception)
             sleep(1)
     # fallback
     fallback_q = "Create a sample Excel question: How to sum values in column B where column A equals 'X'?"
@@ -151,6 +157,7 @@ def save_transcript(name: str, email: str, history: List[Dict], domain: str, num
             f.write(f"Score: {entry.get('score', 0.0):.2f}\n")
             f.write(f"Explanation:\n{entry.get('explanation')}\n\n")
     return filename
+
 
 
 
