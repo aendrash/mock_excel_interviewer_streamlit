@@ -3,7 +3,8 @@ import streamlit as st
 from datetime import datetime
 import interview_logic as interview_logic  # Your logic file
 import pathlib
-import os  # 🔑 To check if HF_API_KEY exists
+import os
+import traceback
 
 # ----------------- Check Hugging Face API Key -----------------
 if not os.getenv("HF_API_KEY"):
@@ -18,48 +19,59 @@ def clear_session_state():
     st.session_state.session = {}
 
 def start_interview(name, email, domain):
-    session_id = name + "_" + email + "_" + datetime.now().strftime("%Y%m%d%H%M%S")
-    session = {
-        "session_id": session_id,
-        "name": name,
-        "email": email,
-        "domain": domain.lower(),
-        "history": [],
-        "difficulty": 5,
-        "num_asked": 0,
-        "num_correct": 0,
-        "num_wrong": 0,
-        "finished": False,
-        "transcript_path": None
-    }
+    try:
+        session_id = name + "_" + email + "_" + datetime.now().strftime("%Y%m%d%H%M%S")
+        session = {
+            "session_id": session_id,
+            "name": name,
+            "email": email,
+            "domain": domain.lower(),
+            "history": [],
+            "difficulty": 5,
+            "num_asked": 0,
+            "num_correct": 0,
+            "num_wrong": 0,
+            "finished": False,
+            "transcript_path": None
+        }
 
-    question, correct_answer = interview_logic.generate_question(
-        session["domain"],
-        session["difficulty"],
-        session["num_asked"],
-        session["num_correct"],
-        session["num_wrong"]
-    )
-    session["current_question"] = question
-    session["correct_answer"] = correct_answer
-    session["num_asked"] = 1
+        question, correct_answer = interview_logic.generate_question(
+            session["domain"],
+            session["difficulty"],
+            session["num_asked"],
+            session["num_correct"],
+            session["num_wrong"]
+        )
+        session["current_question"] = question
+        session["correct_answer"] = correct_answer
+        session["num_asked"] = 1
 
-    st.session_state.session = session
-    return question, session["num_asked"]
+        st.session_state.session = session
+        return question, session["num_asked"]
+    except Exception as e:
+        print("❌ ERROR in start_interview")
+        print(traceback.format_exc())
+        st.error("An error occurred while starting the interview. Check logs.")
+        return None, None
 
 def submit_answer(user_answer):
     session = st.session_state.session
     if session.get("finished"):
         return
 
-    try:  # 🔑 Graceful handling of API issues
+    try:
         score, explanation = interview_logic.evaluate_answer(
             user_answer,
             session["correct_answer"],
             session["current_question"]
         )
     except Exception as e:
-        st.error(f"⚠️ Hugging Face API error: {e}")
+        print("❌ ERROR in submit_answer - evaluate_answer failed")
+        print("User Answer:", user_answer)
+        print("Correct Answer:", session.get("correct_answer"))
+        print("Question:", session.get("current_question"))
+        print(traceback.format_exc())
+        st.error(f"⚠️ Error evaluating answer. Please try again.")
         return None, None, None, None
 
     session["history"].append({
@@ -80,6 +92,51 @@ def submit_answer(user_answer):
 
     # Finish interview after 10 questions
     if session["num_asked"] >= 10:
+        try:
+            session["finished"] = True
+            finished_time = datetime.now()
+            filename = interview_logic.save_transcript(
+                session["name"],
+                session["email"],
+                session["history"],
+                session["domain"],
+                session["num_asked"],
+                session["num_correct"],
+                session["num_wrong"],
+                finished_time
+            )
+            session["transcript_path"] = filename
+        except Exception as e:
+            print("❌ ERROR in save_transcript")
+            print(traceback.format_exc())
+            st.error("Error saving transcript. Check logs.")
+        return session
+
+    # Generate next question
+    try:
+        session["num_asked"] += 1
+        question, correct_answer = interview_logic.generate_question(
+            session["domain"],
+            session["difficulty"],
+            session["num_asked"],
+            session["num_correct"],
+            session["num_wrong"]
+        )
+        session["current_question"] = question
+        session["correct_answer"] = correct_answer
+        return score, explanation, question, session["num_asked"]
+    except Exception as e:
+        print("❌ ERROR in generate_question during submit_answer")
+        print(traceback.format_exc())
+        st.error("Could not generate the next question. Check logs.")
+        return None, None, None, None
+
+def skip_question():
+    return submit_answer("skip")
+
+def exit_interview():
+    session = st.session_state.session
+    try:
         session["finished"] = True
         finished_time = datetime.now()
         filename = interview_logic.save_transcript(
@@ -93,39 +150,10 @@ def submit_answer(user_answer):
             finished_time
         )
         session["transcript_path"] = filename
-        return session
-
-    # Generate next question
-    session["num_asked"] += 1
-    question, correct_answer = interview_logic.generate_question(
-        session["domain"],
-        session["difficulty"],
-        session["num_asked"],
-        session["num_correct"],
-        session["num_wrong"]
-    )
-    session["current_question"] = question
-    session["correct_answer"] = correct_answer
-    return score, explanation, question, session["num_asked"]
-
-def skip_question():
-    return submit_answer("skip")
-
-def exit_interview():
-    session = st.session_state.session
-    session["finished"] = True
-    finished_time = datetime.now()
-    filename = interview_logic.save_transcript(
-        session["name"],
-        session["email"],
-        session["history"],
-        session["domain"],
-        session["num_asked"],
-        session["num_correct"],
-        session["num_wrong"],
-        finished_time
-    )
-    session["transcript_path"] = filename
+    except Exception as e:
+        print("❌ ERROR in exit_interview - save_transcript failed")
+        print(traceback.format_exc())
+        st.error("Error finalizing transcript. Check logs.")
     return session
 
 # ----------------- Streamlit UI -----------------
@@ -144,8 +172,9 @@ if not st.session_state.session:
                 st.error("Please enter your full name and a valid email address.")
             else:
                 question, q_num = start_interview(name.strip(), email.strip(), domain)
-                st.session_state.answer_input_key = 0
-                st.rerun()
+                if question:  # only rerun if success
+                    st.session_state.answer_input_key = 0
+                    st.rerun()
 else:
     session = st.session_state.session
     if session.get("finished"):
