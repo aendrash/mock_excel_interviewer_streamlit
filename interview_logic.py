@@ -9,7 +9,6 @@ HF_API_KEY = os.getenv("HF_API_KEY") or st.secrets.get("HF_API_KEY")
 # add this in Streamlit Cloud secrets
 # MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.2"
 client = InferenceClient(
-    provider="cerebras",
     api_key=HF_API_KEY,
 )
 MAX_LLM_RETRIES = 2
@@ -77,7 +76,7 @@ def request_llm(prompt: str, max_tokens: int = 400) -> str:
     """Send a prompt to the LLM and return its response text safely."""
     try:
         completion = client.chat.completions.create(
-            model="openai/gpt-oss-120b",
+            model="mistralai/Mistral-7B-Instruct-v0.2",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
         )
@@ -87,7 +86,7 @@ def request_llm(prompt: str, max_tokens: int = 400) -> str:
     except Exception as e:
         print("❌ ERROR in request_llm")
         print("Prompt that failed:", prompt)
-        print(traceback.format_exc())
+        print(e)
         raise e  # propagate to app.py
 
 
@@ -131,7 +130,7 @@ def parse_question_answer(text: str) -> Tuple[str, str]:
     except Exception as e:
         print("❌ ERROR in parse_question_answer")
         print("Raw text:", text)
-        print(traceback.format_exc())
+        print(e)
         raise e
 
 def generate_question(domain: str, difficulty: int, num_asked: int, num_correct: int, num_wrong: int) -> Tuple[str, str]:
@@ -141,7 +140,7 @@ def generate_question(domain: str, difficulty: int, num_asked: int, num_correct:
         try:
             response_text = request_llm(prompt)
             question, correct_answer = parse_question_answer(response_text)
-            print(" question " , question , " answer " ,answer)
+            print(" question " , question , " answer " ,correct_answer)
             if question and correct_answer:
                 return question, correct_answer
         except Exception:
@@ -194,7 +193,6 @@ def save_transcript(name: str, email: str, history: List[Dict], domain: str, num
             f.write(f"Score: {entry.get('score', 0.0):.2f}\n")
             f.write(f"Explanation:\n{entry.get('explanation')}\n\n")
     return filename
-
 
 
 
