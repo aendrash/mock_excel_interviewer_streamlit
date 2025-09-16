@@ -5,7 +5,8 @@ from typing import Tuple, List, Dict
 from huggingface_hub import InferenceClient
 
 # Init Hugging Face client
-HF_API_KEY = os.getenv("HF_API_KEY")  # add this in Streamlit Cloud secrets
+HF_API_KEY = os.getenv("HF_API_KEY") or st.secrets.get("HF_API_KEY")
+# add this in Streamlit Cloud secrets
 # MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.2"
 client = InferenceClient(
     provider="cerebras",
@@ -54,13 +55,13 @@ def request_llm(prompt: str, max_tokens: int = 400) -> str:
     while attempt <= MAX_LLM_RETRIES:
         try:
             completion = client.chat.completions.create(
-                model="openai/gpt-oss-120b",   # change if you want other supported models
+                model="openai/gpt-oss-120b",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=max_tokens,
                 temperature=0.7,
             )
-            # Extract text safely
-            return completion.choices[0].message["content"]
+            # Extract text safely (works both locally & Streamlit Cloud)
+            return getattr(completion.choices[0].message, "content", None) or completion.choices[0].message.get("content", "")
         except Exception as e:
             attempt += 1
             if attempt > MAX_LLM_RETRIES:
@@ -68,16 +69,29 @@ def request_llm(prompt: str, max_tokens: int = 400) -> str:
             sleep(1)
 
 
+
 # ---------------- Generate Question ----------------
 def parse_question_answer(text: str) -> Tuple[str, str]:
     question, answer = "", ""
-    for line in text.split("\n"):
+    for line in text.splitlines():
         clean = line.strip().lower()
         if clean.startswith("question"):
-            question = line.split(":", 1)[1].strip() if ":" in line else line.split("-", 1)[1].strip()
+            question = line.split(":", 1)[1].strip()
         elif clean.startswith("answer"):
-            answer = line.split(":", 1)[1].strip() if ":" in line else line.split("-", 1)[1].strip()
+            answer = line.split(":", 1)[1].strip()
+
+    # Fallback: sometimes LLM returns in markdown ``` blocks
+    if not question or not answer:
+        import re
+        q_match = re.search(r"question\s*[:\-]\s*(.*)", text, re.I)
+        a_match = re.search(r"answer\s*[:\-]\s*(.*)", text, re.I)
+        if q_match:
+            question = q_match.group(1).strip()
+        if a_match:
+            answer = a_match.group(1).strip()
+
     return question, answer
+
 
 
 def generate_question(domain: str, difficulty: int, num_asked: int, num_correct: int, num_wrong: int) -> Tuple[str, str]:
@@ -137,6 +151,7 @@ def save_transcript(name: str, email: str, history: List[Dict], domain: str, num
             f.write(f"Score: {entry.get('score', 0.0):.2f}\n")
             f.write(f"Explanation:\n{entry.get('explanation')}\n\n")
     return filename
+
 
 
 
