@@ -50,55 +50,92 @@ def create_llm_scoring_prompt(user_answer: str, correct_answer: str, question_te
     )
 
 # ---------------- LLM Requests ----------------
+# def request_llm(prompt: str, max_tokens: int = 400) -> str:
+#     attempt = 0
+#     while attempt <= MAX_LLM_RETRIES:
+#         try:
+#             completion = client.chat.completions.create(
+#                 model="openai/gpt-oss-120b",
+#                 messages=[{"role": "user", "content": prompt}],
+#                 max_tokens=max_tokens,
+#                 temperature=0.7,
+#             )
+#             # Extract text safely (works both locally & Streamlit Cloud)
+#             try:
+#                 print(completion.choices[0].message)
+#             except:
+#                 pass
+#             return getattr(completion.choices[0].message, "content", None) or completion.choices[0].message.get("content", "")
+#         except Exception as e:
+#             attempt += 1
+#             if attempt > MAX_LLM_RETRIES:
+#                 raise e
+#             sleep(1)
+
+
 def request_llm(prompt: str, max_tokens: int = 400) -> str:
-    attempt = 0
-    while attempt <= MAX_LLM_RETRIES:
-        try:
-            completion = client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tokens,
-                temperature=0.7,
-            )
-            # Extract text safely (works both locally & Streamlit Cloud)
-            try:
-                print(completion.choices[0].message)
-            except:
-                pass
-            return getattr(completion.choices[0].message, "content", None) or completion.choices[0].message.get("content", "")
-        except Exception as e:
-            attempt += 1
-            if attempt > MAX_LLM_RETRIES:
-                raise e
-            sleep(1)
+    """Send a prompt to the LLM and return its response text safely."""
+    try:
+        completion = client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+        )
+        response_text = completion.choices[0].message.content
+        print("DEBUG LLM Response:", response_text)  # goes to Streamlit Cloud logs
+        return response_text
+    except Exception as e:
+        print("❌ ERROR in request_llm")
+        print("Prompt that failed:", prompt)
+        print(traceback.format_exc())
+        raise e  # propagate to app.py
 
 
 
 # ---------------- Generate Question ----------------
+# def parse_question_answer(text: str) -> Tuple[str, str]:
+#     question, answer = "", ""
+#     for line in text.splitlines():
+#         clean = line.strip().lower()
+#         if clean.startswith("question"):
+#             question = line.split(":", 1)[1].strip()
+#         elif clean.startswith("answer"):
+#             answer = line.split(":", 1)[1].strip()
+
+#     # Fallback: sometimes LLM returns in markdown ``` blocks
+#     if not question or not answer:
+#         import re
+#         q_match = re.search(r"question\s*[:\-]\s*(.*)", text, re.I)
+#         a_match = re.search(r"answer\s*[:\-]\s*(.*)", text, re.I)
+#         if q_match:
+#             question = q_match.group(1).strip()
+#         if a_match:
+#             answer = a_match.group(1).strip()
+
+#     return question, answer
+
+
 def parse_question_answer(text: str) -> Tuple[str, str]:
+    """Parse Question and Answer from the model response."""
     question, answer = "", ""
-    for line in text.splitlines():
-        clean = line.strip().lower()
-        if clean.startswith("question"):
-            question = line.split(":", 1)[1].strip()
-        elif clean.startswith("answer"):
-            answer = line.split(":", 1)[1].strip()
-
-    # Fallback: sometimes LLM returns in markdown ``` blocks
-    if not question or not answer:
-        import re
-        q_match = re.search(r"question\s*[:\-]\s*(.*)", text, re.I)
-        a_match = re.search(r"answer\s*[:\-]\s*(.*)", text, re.I)
-        if q_match:
-            question = q_match.group(1).strip()
-        if a_match:
-            answer = a_match.group(1).strip()
-
-    return question, answer
-
-
+    try:
+        for line in text.split("\n"):
+            clean = line.strip().lower()
+            if clean.startswith("question"):
+                question = line.split(":", 1)[1].strip() if ":" in line else line.split("-", 1)[1].strip()
+            elif clean.startswith("answer"):
+                answer = line.split(":", 1)[1].strip() if ":" in line else line.split("-", 1)[1].strip()
+        print("DEBUG Parsed Question:", question)
+        print("DEBUG Parsed Answer:", answer)
+        return question, answer
+    except Exception as e:
+        print("❌ ERROR in parse_question_answer")
+        print("Raw text:", text)
+        print(traceback.format_exc())
+        raise e
 
 def generate_question(domain: str, difficulty: int, num_asked: int, num_correct: int, num_wrong: int) -> Tuple[str, str]:
+    print(HF_API_KEY)
     prompt = create_llm_question_prompt(domain, difficulty, num_asked, num_correct, num_wrong)
     for attempt in range(MAX_LLM_RETRIES + 1):
         try:
@@ -157,6 +194,7 @@ def save_transcript(name: str, email: str, history: List[Dict], domain: str, num
             f.write(f"Score: {entry.get('score', 0.0):.2f}\n")
             f.write(f"Explanation:\n{entry.get('explanation')}\n\n")
     return filename
+
 
 
 
